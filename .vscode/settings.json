@@ -1,0 +1,7 @@
+{
+    "files.autoSave": "afterDelay",
+    "[cmake]": {
+        "files.autoSave": "off"
+    },
+    "editor.indentSize": 2
+}
