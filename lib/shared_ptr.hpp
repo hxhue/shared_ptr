@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <type_traits>
 #include <typeinfo>
@@ -55,15 +56,15 @@ struct control_block {
 
 struct monostate {};
 
-struct DefaultDeleter {
-  template <typename T> void operator()(T *ptr) const { delete ptr; }
+template <typename T> struct DefaultDeleter {
+  void operator()(void *ptr) const { delete static_cast<T *>(ptr); }
 };
 
-template <typename T, typename Deleter = DefaultDeleter>
-struct control_block_with_ptr : control_block {
+template <typename T> struct control_block_with_ptr : control_block {
   explicit control_block_with_ptr(T *ptr)
-      : control_block_with_ptr(ptr, DefaultDeleter()) {}
+      : control_block_with_ptr(ptr, DefaultDeleter<T>()) {}
 
+  template <typename Deleter>
   control_block_with_ptr(T *ptr, Deleter deleter)
       : ptr_(ptr), deleter_(std::move(deleter)) {}
 
@@ -76,7 +77,7 @@ struct control_block_with_ptr : control_block {
 
 private:
   T *ptr_;
-  Deleter deleter_;
+  ::std::function<void(T *)> deleter_;
 
   T *getptr() { return ptr_; }
 };
@@ -103,9 +104,18 @@ private:
   T *getptr() { return &obj_; }
 };
 
+// template <typename T, typename Y>
+// concept valid_ptr_conversion =
+//     ::std::is_base_of_v<T, Y> || ::std::is_same_v<T, Y>;
+
+template <typename T, typename Y>
+concept valid_ptr_conversion = ::std::is_base_of_v<T, Y>;
+
 } // namespace detail
 
 template <typename T> struct shared_ptr {
+private:
+public:
   template <typename Y> friend class shared_ptr;
 
   // Constructors from
@@ -116,11 +126,11 @@ template <typename T> struct shared_ptr {
       : ptr_(nullptr), ctrl_(nullptr) {}
 
   template <typename Y>
-    requires(::std::is_base_of_v<T, Y>)
-  explicit shared_ptr(Y *ptr) : shared_ptr(ptr, detail::DefaultDeleter{}) {}
+    requires(detail::valid_ptr_conversion<T, Y>)
+  explicit shared_ptr(Y *ptr) : shared_ptr(ptr, detail::DefaultDeleter<T>{}) {}
 
   template <class Y, class Deleter>
-    requires(::std::is_base_of_v<T, Y>)
+    requires(detail::valid_ptr_conversion<T, Y>)
   shared_ptr(Y *ptr, Deleter d) {
     if (!ptr) {
       clear();
@@ -138,7 +148,7 @@ template <typename T> struct shared_ptr {
 
   // TODO
   template <class Y, class Deleter, class Alloc>
-    requires(::std::is_base_of_v<T, Y>)
+    requires(detail::valid_ptr_conversion<T, Y>)
   shared_ptr(Y *ptr, Deleter d, Alloc alloc);
 
   template <class Deleter, class Alloc>
@@ -147,13 +157,13 @@ template <typename T> struct shared_ptr {
 
   // Aliasing constructors
   template <class Y>
-    requires(::std::is_base_of_v<T, Y>)
+    requires(detail::valid_ptr_conversion<T, Y>)
   shared_ptr(const shared_ptr<Y> &r, T *ptr) noexcept : shared_ptr(r) {
     ptr_ = ptr;
   }
 
   template <class Y>
-    requires(::std::is_base_of_v<T, Y>)
+    requires(detail::valid_ptr_conversion<T, Y>)
   shared_ptr(shared_ptr<Y> &&r, T *ptr) noexcept : shared_ptr(r) {
     ptr_ = ptr;
   }
@@ -169,7 +179,7 @@ template <typename T> struct shared_ptr {
   }
 
   template <class Y>
-    requires(::std::is_base_of_v<T, Y>)
+    requires(detail::valid_ptr_conversion<T, Y>)
   shared_ptr(const shared_ptr<Y> &r) noexcept {
     if (!r.ctrl_) {
       clear();
@@ -188,7 +198,7 @@ template <typename T> struct shared_ptr {
   }
 
   template <class Y>
-    requires(::std::is_base_of_v<T, Y>)
+    requires(detail::valid_ptr_conversion<T, Y>)
   shared_ptr(shared_ptr<Y> &&r) noexcept {
     if (!r.ctrl_) {
       clear();
@@ -203,7 +213,7 @@ template <typename T> struct shared_ptr {
   // template <class Y> explicit shared_ptr(const std::weak_ptr<Y> &r);
 
   template <class Y, class Deleter>
-    requires(::std::is_base_of_v<T, Y>)
+    requires(detail::valid_ptr_conversion<T, Y>)
   shared_ptr(unique_ptr<Y, Deleter> &&r) {
     auto y = r.release();
     try {
@@ -220,14 +230,15 @@ template <typename T> struct shared_ptr {
   shared_ptr &operator=(const shared_ptr &r) noexcept {
     shared_ptr temp{r};
     temp.swap(*this);
+    return *this;
   }
 
   shared_ptr &operator=(shared_ptr &&r) noexcept {
     shared_ptr temp{r};
     temp.swap(*this);
+    return *this;
   }
 
-  // TODO: full list of shared_ptr<T>::reset
   void reset() {
     if (ctrl_) {
       ctrl_->decrement_use_count();
@@ -235,7 +246,29 @@ template <typename T> struct shared_ptr {
     clear();
   }
 
-  void swap(shared_ptr &r) noexcept { ::std::swap(*this, r); }
+  template <class Y>
+    requires(detail::valid_ptr_conversion<T, Y>)
+  void reset(Y *ptr) {
+    shared_ptr temp{ptr};
+    temp.swap(*this);
+  }
+
+  template <class Y, class Deleter>
+    requires(detail::valid_ptr_conversion<T, Y>)
+  void reset(Y *ptr, Deleter d) {
+    shared_ptr temp{ptr, std::move(d)};
+    temp.swap(*this);
+  }
+
+  // TODO
+  template <class Y, class Deleter, class Alloc>
+    requires(detail::valid_ptr_conversion<T, Y>)
+  void reset(Y *ptr, Deleter d, Alloc alloc);
+
+  void swap(shared_ptr &r) noexcept {
+    ::std::swap(ptr_, r.ptr_);
+    ::std::swap(ctrl_, r.ctrl_);
+  }
 
   T *get() const noexcept { return ptr_; }
 
