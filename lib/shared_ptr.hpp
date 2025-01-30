@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -22,7 +23,7 @@ struct control_block {
   ::std::atomic<int> use_count;  // Strong count.
   ::std::atomic<int> weak_count; // Weak count + !!(strong count).
 
-  control_block() : use_count(0), weak_count(0) {}
+  control_block() : use_count(1), weak_count(1) {}
 
   control_block(int use, int weak) : use_count(use), weak_count(weak) {}
 
@@ -39,9 +40,13 @@ struct control_block {
   }
 
   void decrement_use_count() {
-    if (1 == use_count.fetch_sub(1, ::std::memory_order_relaxed)) {
+    int old_use_count = use_count.fetch_sub(1, ::std::memory_order_relaxed);
+    assert(old_use_count > 0);
+    if (old_use_count == 1) {
       destroy();
-      if (1 == weak_count.fetch_sub(1, ::std::memory_order_relaxed)) {
+      int old_weak_count = weak_count.fetch_sub(1, ::std::memory_order_relaxed);
+      assert(old_weak_count > 0);
+      if (old_weak_count == 1) {
         delete this;
       }
     }
@@ -60,7 +65,7 @@ struct control_block_with_ptr : control_block {
       : control_block_with_ptr(ptr, DefaultDeleter()) {}
 
   control_block_with_ptr(T *ptr, Deleter deleter)
-      : control_block(1, 0), ptr_(ptr), deleter_(std::move(deleter)) {}
+      : ptr_(ptr), deleter_(std::move(deleter)) {}
 
   // void *getaddr() override { return static_cast<void *>(getptr()); }
 
@@ -111,9 +116,12 @@ template <typename T> struct shared_ptr {
       : ptr_(nullptr), ctrl_(nullptr) {}
 
   template <typename Y>
+    requires(::std::is_base_of_v<T, Y>)
   explicit shared_ptr(Y *ptr) : shared_ptr(ptr, detail::DefaultDeleter{}) {}
 
-  template <class Y, class Deleter> shared_ptr(Y *ptr, Deleter d) {
+  template <class Y, class Deleter>
+    requires(::std::is_base_of_v<T, Y>)
+  shared_ptr(Y *ptr, Deleter d) {
     if (!ptr) {
       clear();
     } else {
@@ -130,6 +138,7 @@ template <typename T> struct shared_ptr {
 
   // TODO
   template <class Y, class Deleter, class Alloc>
+    requires(::std::is_base_of_v<T, Y>)
   shared_ptr(Y *ptr, Deleter d, Alloc alloc);
 
   template <class Deleter, class Alloc>
@@ -138,16 +147,14 @@ template <typename T> struct shared_ptr {
 
   // Aliasing constructors
   template <class Y>
-  shared_ptr(const shared_ptr<Y> &r, T *ptr) noexcept
     requires(::std::is_base_of_v<T, Y>)
-      : shared_ptr(r) {
+  shared_ptr(const shared_ptr<Y> &r, T *ptr) noexcept : shared_ptr(r) {
     ptr_ = ptr;
   }
 
   template <class Y>
-  shared_ptr(shared_ptr<Y> &&r, T *ptr) noexcept
     requires(::std::is_base_of_v<T, Y>)
-      : shared_ptr(r) {
+  shared_ptr(shared_ptr<Y> &&r, T *ptr) noexcept : shared_ptr(r) {
     ptr_ = ptr;
   }
 
@@ -162,9 +169,8 @@ template <typename T> struct shared_ptr {
   }
 
   template <class Y>
-  shared_ptr(const shared_ptr<Y> &r) noexcept
     requires(::std::is_base_of_v<T, Y>)
-  {
+  shared_ptr(const shared_ptr<Y> &r) noexcept {
     if (!r.ctrl_) {
       clear();
     } else {
@@ -182,9 +188,8 @@ template <typename T> struct shared_ptr {
   }
 
   template <class Y>
-  shared_ptr(shared_ptr<Y> &&r) noexcept
     requires(::std::is_base_of_v<T, Y>)
-  {
+  shared_ptr(shared_ptr<Y> &&r) noexcept {
     if (!r.ctrl_) {
       clear();
     } else {
@@ -197,7 +202,9 @@ template <typename T> struct shared_ptr {
   // TODO: weak_ptr
   // template <class Y> explicit shared_ptr(const std::weak_ptr<Y> &r);
 
-  template <class Y, class Deleter> shared_ptr(unique_ptr<Y, Deleter> &&r) {
+  template <class Y, class Deleter>
+    requires(::std::is_base_of_v<T, Y>)
+  shared_ptr(unique_ptr<Y, Deleter> &&r) {
     auto y = r.release();
     try {
       new (this) shared_ptr(y, r.get_deleter());

@@ -4,10 +4,11 @@
 #include <mutex>
 #include <thread>
 
-#include "shared_ptr.hpp"
-
-using namespace lockfree;
 using namespace std::chrono_literals;
+
+#include "shared_ptr.hpp"
+using namespace lockfree;
+// using std::shared_ptr;
 
 struct Base {
   Base() { std::cout << "Base::Base()\n"; }
