@@ -57,16 +57,31 @@ struct control_block {
 struct monostate {};
 
 template <typename T> struct DefaultDeleter {
-  void operator()(void *ptr) const { delete static_cast<T *>(ptr); }
+  void operator()(void *ptr) const {
+    if constexpr (::std::is_array_v<T>) {
+      using pointer_type = ::std::add_pointer_t<::std::remove_extent_t<T>>;
+      delete[] static_cast<pointer_type>(ptr);
+    } else {
+      delete static_cast<T *>(ptr);
+    }
+  }
 };
 
+template <typename T, typename Y>
+concept convertible = ::std::is_base_of_v<T, Y> || ::std::is_same_v<T, Y>;
+
 template <typename T> struct control_block_with_ptr : control_block {
-  explicit control_block_with_ptr(T *ptr)
+  using element_type =
+      ::std::conditional_t<::std::is_array_v<T>, ::std::remove_extent_t<T>, T>;
+
+  explicit control_block_with_ptr(element_type *ptr)
       : control_block_with_ptr(ptr, DefaultDeleter<T>()) {}
 
   template <typename Deleter>
-  control_block_with_ptr(T *ptr, Deleter deleter)
-      : ptr_(ptr), deleter_(std::move(deleter)) {}
+  control_block_with_ptr(element_type *ptr, Deleter deleter)
+      : ptr_(ptr), deleter_([deleter = std::move(deleter)](void *p) {
+          deleter(static_cast<element_type *>(p));
+        }) {}
 
   // void *getaddr() override { return static_cast<void *>(getptr()); }
 
@@ -76,10 +91,10 @@ template <typename T> struct control_block_with_ptr : control_block {
   }
 
 private:
-  T *ptr_;
-  ::std::function<void(T *)> deleter_;
+  element_type *ptr_;
+  ::std::function<void(void *)> deleter_;
 
-  T *getptr() { return ptr_; }
+  element_type *getptr() { return ptr_; }
 };
 
 // TODO: control_block_with_inplace_obj is incomplete.
@@ -103,20 +118,14 @@ private:
 
   T *getptr() { return &obj_; }
 };
-
-// template <typename T, typename Y>
-// concept valid_ptr_conversion =
-//     ::std::is_base_of_v<T, Y> || ::std::is_same_v<T, Y>;
-
-template <typename T, typename Y>
-concept valid_ptr_conversion = ::std::is_base_of_v<T, Y>;
-
 } // namespace detail
 
 template <typename T> struct shared_ptr {
-private:
 public:
   template <typename Y> friend class shared_ptr;
+
+  using element_type =
+      ::std::conditional_t<::std::is_array_v<T>, ::std::remove_extent_t<T>, T>;
 
   // Constructors from
   // https://en.cppreference.com/w/cpp/memory/shared_ptr/shared_ptr.
@@ -126,16 +135,16 @@ public:
       : ptr_(nullptr), ctrl_(nullptr) {}
 
   template <typename Y>
-    requires(detail::valid_ptr_conversion<T, Y>)
+    requires(detail::convertible<element_type, Y>)
   explicit shared_ptr(Y *ptr) : shared_ptr(ptr, detail::DefaultDeleter<T>{}) {}
 
   template <class Y, class Deleter>
-    requires(detail::valid_ptr_conversion<T, Y>)
+    requires(detail::convertible<element_type, Y>)
   shared_ptr(Y *ptr, Deleter d) {
     if (!ptr) {
       clear();
     } else {
-      if (!(ptr_ = dynamic_cast<T *>(ptr))) {
+      if (!(ptr_ = static_cast<element_type *>(ptr))) {
         throw ::std::bad_cast{};
       }
       ctrl_ = new detail::control_block_with_ptr<T>(ptr_, std::move(d));
@@ -148,7 +157,7 @@ public:
 
   // TODO
   template <class Y, class Deleter, class Alloc>
-    requires(detail::valid_ptr_conversion<T, Y>)
+    requires(detail::convertible<element_type, Y>)
   shared_ptr(Y *ptr, Deleter d, Alloc alloc);
 
   template <class Deleter, class Alloc>
@@ -157,14 +166,15 @@ public:
 
   // Aliasing constructors
   template <class Y>
-    requires(detail::valid_ptr_conversion<T, Y>)
-  shared_ptr(const shared_ptr<Y> &r, T *ptr) noexcept : shared_ptr(r) {
+    requires(detail::convertible<element_type, Y>)
+  shared_ptr(const shared_ptr<Y> &r, element_type *ptr) noexcept
+      : shared_ptr(r) {
     ptr_ = ptr;
   }
 
   template <class Y>
-    requires(detail::valid_ptr_conversion<T, Y>)
-  shared_ptr(shared_ptr<Y> &&r, T *ptr) noexcept : shared_ptr(r) {
+    requires(detail::convertible<element_type, Y>)
+  shared_ptr(shared_ptr<Y> &&r, element_type *ptr) noexcept : shared_ptr(r) {
     ptr_ = ptr;
   }
 
@@ -179,7 +189,7 @@ public:
   }
 
   template <class Y>
-    requires(detail::valid_ptr_conversion<T, Y>)
+    requires(detail::convertible<element_type, Y>)
   shared_ptr(const shared_ptr<Y> &r) noexcept {
     if (!r.ctrl_) {
       clear();
@@ -198,7 +208,7 @@ public:
   }
 
   template <class Y>
-    requires(detail::valid_ptr_conversion<T, Y>)
+    requires(detail::convertible<element_type, Y>)
   shared_ptr(shared_ptr<Y> &&r) noexcept {
     if (!r.ctrl_) {
       clear();
@@ -213,7 +223,7 @@ public:
   // template <class Y> explicit shared_ptr(const std::weak_ptr<Y> &r);
 
   template <class Y, class Deleter>
-    requires(detail::valid_ptr_conversion<T, Y>)
+    requires(detail::convertible<element_type, Y>)
   shared_ptr(unique_ptr<Y, Deleter> &&r) {
     auto y = r.release();
     try {
@@ -247,14 +257,14 @@ public:
   }
 
   template <class Y>
-    requires(detail::valid_ptr_conversion<T, Y>)
+    requires(detail::convertible<element_type, Y>)
   void reset(Y *ptr) {
     shared_ptr temp{ptr};
     temp.swap(*this);
   }
 
   template <class Y, class Deleter>
-    requires(detail::valid_ptr_conversion<T, Y>)
+    requires(detail::convertible<element_type, Y>)
   void reset(Y *ptr, Deleter d) {
     shared_ptr temp{ptr, std::move(d)};
     temp.swap(*this);
@@ -262,7 +272,7 @@ public:
 
   // TODO
   template <class Y, class Deleter, class Alloc>
-    requires(detail::valid_ptr_conversion<T, Y>)
+    requires(detail::convertible<element_type, Y>)
   void reset(Y *ptr, Deleter d, Alloc alloc);
 
   void swap(shared_ptr &r) noexcept {
@@ -285,7 +295,7 @@ public:
   explicit operator bool() const noexcept { return ptr_ != nullptr; }
 
 private:
-  T *ptr_;
+  element_type *ptr_;
   detail::control_block *ctrl_;
 
   void clear() {

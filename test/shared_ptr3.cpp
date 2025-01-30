@@ -136,10 +136,13 @@ void test_edge_cases() {
 
   // 数组测试（如果支持的话）
   // 注意：标准库 shared_ptr 默认不支持数组，需要自定义删除器
-  // TODO:
-  // {
-  //     shared_ptr<int[]> arr(new int[5], [](int* p) { delete[] p; });
-  // }
+  {
+    shared_ptr<int[]> arr(new int[5], [](int *p) { delete[] p; });
+  }
+
+  {
+    shared_ptr<int[]> arr(new int[5]); // Default deleter
+  }
 }
 
 void clean() {
