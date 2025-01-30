@@ -261,6 +261,11 @@ private:
   }
 };
 
+// TODO: For now, use an inefficient implementation.
+template <class T, class... Args> shared_ptr<T> make_shared(Args &&...args) {
+  return shared_ptr<T>(new T(std::forward<Args...>(args...)));
+}
+
 } // namespace lockfree
 
 template <class T, class U>
